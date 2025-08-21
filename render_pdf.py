@@ -9,7 +9,8 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.graphics.charts.lineplots import LinePlot
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
-from al_syft import OUTPUT_FOLDER
+# from al_syft import OUTPUT_FOLDER
+from al_syft import OUTPUT_FOLDER, ROOT, process_file, find_first_subfolder_starting_with, find_30min_csv
 import csv
 
 LINEPLOT_COLORMAP = [
@@ -85,5 +86,17 @@ def render_pdf(data_file):
     c.save()
 
 if __name__ == "__main__":
-    for file in os.listdir(OUTPUT_FOLDER):
+    for file in os.listdir(OUTPUT_FOLDER):# --- Helpers for locating the 30-min scan, used by render_pdf.py ---
+def find_first_subfolder_starting_with(parent: Path, prefix: str) -> Path | None:
+    for p in sorted(parent.iterdir()):
+        if p.is_dir() and p.name.startswith(prefix):
+            return p
+    return None
+
+def find_30min_csv(folder: Path) -> Path | None:
+    for p in sorted(folder.iterdir()):
+        if p.is_file() and p.suffix.lower() == ".csv" and "30min" in p.name.lower():
+            return p
+    return None
+
         render_pdf(os.path.join(OUTPUT_FOLDER, file))

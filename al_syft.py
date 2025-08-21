@@ -15,11 +15,11 @@ OUTPUT_FOLDER = Path(ROOT) / "results"
 
 logging.basicConfig(format='[ %(levelname)s ] - %(message)s', level=logging.INFO)
 
-def process_file(file):
-    logging.info(f"Processing file {file}")
+def process_file(fileName):
+    logging.info(f"Processing file {fileName}")
     data = []
 
-    with open(file, 'r') as f:
+    with open(fileName, 'r') as f:
         reader = csv.reader(f)
         data = list(reader)
 
@@ -57,16 +57,16 @@ def process_file(file):
     return data
 
 
-def process_folder(dirName, rootDir, outputPath):
-    logging.info(f"Processing {dirName}")
+def process_folder(clientDirectoryName, rootDir, outputPath):
+    logging.info(f"Processing {clientDirectoryName}")
 
-    output_file = Path(outputPath) / (dirName + '.csv')
-    data_folder = Path(rootDir) / dirName
+    outputFilePath = Path(outputPath) / (clientDirectoryName + '.csv')
+    clientPath = Path(rootDir) / clientDirectoryName
 
     files_to_process = []
 
-    for item in os.listdir(data_folder):
-        filename = os.path.join(data_folder, item)
+    for item in os.listdir(clientPath):
+        filename = os.path.join(clientPath, item)
 
         if os.path.isfile(filename):
             continue
@@ -78,8 +78,8 @@ def process_folder(dirName, rootDir, outputPath):
             files_to_process.extend([os.path.join(filename, f) for f in os.listdir(filename)])
 
 
-    def filter_files(file):
-        if not file.endswith('.csv'):
+    def filter_files(fileName):
+        if not fileName.endswith('.csv'):
             return False
 
         # Manually Filter out relevant files
@@ -95,7 +95,7 @@ def process_folder(dirName, rootDir, outputPath):
             ' -3 ',
             ' -7 ',
         ]:
-            if item.lower() in file.lower():
+            if item.lower() in fileName.lower():
                 return True
 
         return False
@@ -120,17 +120,40 @@ def process_folder(dirName, rootDir, outputPath):
                 data[key].append(value)
 
 
-    with open(output_file, 'w') as f:
+    with open(outputFilePath, 'w') as f:
         writer = csv.writer(f)
         writer.writerow(["Reagent", "Product", "Average Intensity", *successfully_processed])
         for (reagent, product), values in data.items():
             average = sum(values) / len(values)
             writer.writerow([reagent, product, average, *values])
 
+def findMassScansFileNames(clientFolder, rootDir):
+    clientPath = Path(rootDir) / clientFolder
+    allDirectoresUnderClient = [os.path.join(clientPath,d) for d in os.listdir(clientPath) if os.path.isdir(os.path.join(clientPath, d))]
+    allScanFiles = []
+    for subDir in allDirectoresUnderClient:
+        for fileName in os.listdir(os.path.join(subDir,subDir)):
+            res = re.search(r"2-Mass-Scan-pos-neg.* ([0-9]+)min.*\.csv$", fileName)
+            if res is None:
+                continue
+            minutes = int(res.group(1))
+            if minutes == 30:
+                allScanFiles.append((os.path.join(subDir,fileName), minutes))
+    return allScanFiles
+
+def processMassScans(clientFolder, rootDir, outputPath):
+    allScanNames = findMassScansFileNames(clientFolder, rootDir)
+    clientPath = Path(rootDir) / clientFolder
+    for fileName in allScanNames:
+       massScanData = process_file(os.path.join(fileName[0]))
+
+
 if __name__ == "__main__":
     OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 
-    folders = [f for f in os.listdir(ROOT) if re.match(r'AL-\d*', f)]
+    clientFolders = [f for f in os.listdir(ROOT) if re.match(r'AL-\d*', f)]
 
-    for folder in folders:
-        process_folder(folder, ROOT, OUTPUT_FOLDER)
+    for clientFolder in clientFolders:
+        process_folder(clientFolder, ROOT, OUTPUT_FOLDER)
+
+
