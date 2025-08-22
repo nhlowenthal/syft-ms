@@ -4,6 +4,8 @@ from pathlib import Path
 import csv
 import logging
 
+from render_pdf import renderClientPDF, renderAverageBaseline
+
 # --------------
 # VARIABLES
 # --------------
@@ -14,6 +16,7 @@ OUTPUT_FOLDER = Path(ROOT) / "results"
 # --------------
 
 logging.basicConfig(format='[ %(levelname)s ] - %(message)s', level=logging.INFO)
+
 
 def process_file(fileName):
     logging.info(f"Processing file {fileName}")
@@ -52,18 +55,60 @@ def process_file(fileName):
                 del data[(reagent, product)]
 
     for key in data.keys():
-        data[key] = sum(data[key]) / len(data[key])
+        data[key] = [sum(data[key]) / len(data[key])]
 
     return data
 
+def catenateFilesWithAverage(fileNames, fileDatas):
+    newData = {}
+    for fileData in fileDatas:
+        for key, valueList in fileData.items():
+            value = valueList[0]
+            if key not in newData:
+                newData[key] = [value]
+            else:
+                newData[key].append(value)
 
-def process_folder(clientDirectoryName, rootDir, outputPath):
+    for reagent_product, intensities in newData.items():
+        averageIntensity = sum(intensities) / len(intensities)
+        intensitiesWithAverage = [averageIntensity]
+        intensitiesWithAverage.extend(intensities)
+        newData[reagent_product] = intensitiesWithAverage
+
+    newFilenames = ["Average Intensity", *fileNames]
+
+    return (newFilenames, newData)
+
+def readFileData(filePath):
+    data = []
+    output = {}
+    with open(filePath, 'r') as f:
+        reader = csv.reader(f)
+        data = list(reader)
+
+    for row in data[1:]:
+        reagent, product, intensity, *other = row
+        output[(int(reagent), int(product))] = [float(intensity)]
+
+    return output
+
+
+
+def writeFileDatas(outputPath, outputName, columnNames, fileDatas):
+    outputFilePath = Path(outputPath) / (outputName + '.csv')
+
+    with open(outputFilePath, 'w') as f:
+        writer = csv.writer(f)
+        writer.writerow(["Reagent", "Product", *columnNames])
+        for (reagent, product), values in fileDatas.items():
+            writer.writerow([reagent, product, *values])
+
+def findBaselineFilenames(clientDirectoryName, rootDir):
     logging.info(f"Processing {clientDirectoryName}")
 
-    outputFilePath = Path(outputPath) / (clientDirectoryName + '.csv')
     clientPath = Path(rootDir) / clientDirectoryName
 
-    files_to_process = []
+    baselineFiles = []
 
     for item in os.listdir(clientPath):
         filename = os.path.join(clientPath, item)
@@ -71,14 +116,10 @@ def process_folder(clientDirectoryName, rootDir, outputPath):
         if os.path.isfile(filename):
             continue
 
-        if (
-            re.match(r'0.*baseline.*', item.lower())
-            or re.match(r'2.*mass.*', item.lower())
-        ):
-            files_to_process.extend([os.path.join(filename, f) for f in os.listdir(filename)])
+        if (re.match(r'0.*baseline.*', item.lower()) or re.match(r'2.*mass.*', item.lower())):
+            baselineFiles.extend([os.path.join(filename, f) for f in os.listdir(filename)])
 
-
-    def filter_files(fileName):
+    def baselineFilenameFilter(fileName):
         if not fileName.endswith('.csv'):
             return False
 
@@ -94,58 +135,83 @@ def process_folder(clientDirectoryName, rootDir, outputPath):
             'neg 7',
             ' -3 ',
             ' -7 ',
+            ' -3min',
+            ' -7min',
         ]:
             if item.lower() in fileName.lower():
                 return True
 
         return False
 
-    files_to_process = list(filter(filter_files, files_to_process))
+    baselineFiles = list(filter(baselineFilenameFilter, baselineFiles))
+    return baselineFiles
 
-    data = {}
-    successfully_processed = []
+
+def processBaseline(clientDirectoryName, rootDir, outputPath):
+    successfulFileName = []
+    successfulFileData = []
+
+    files_to_process = findBaselineFilenames(clientDirectoryName, rootDir)
 
     for file in files_to_process:
-        processed_file = process_file(file)
+        fileData = process_file(file)
 
-        if processed_file is None:
+        if fileData is None:
             continue
 
-        successfully_processed.append(Path(file).name)
+        successfulFileName.append(Path(file).name)
+        successfulFileData.append(fileData)
 
-        for key, value in processed_file.items():
-            if key not in data:
-                data[key] = [value]
-            else:
-                data[key].append(value)
+    (catenatedFileNames, catenatedFileDatas) = catenateFilesWithAverage(successfulFileName, successfulFileData)
+
+    writeFileDatas(outputPath, clientDirectoryName + "-baseline", catenatedFileNames, catenatedFileDatas)
 
 
-    with open(outputFilePath, 'w') as f:
-        writer = csv.writer(f)
-        writer.writerow(["Reagent", "Product", "Average Intensity", *successfully_processed])
-        for (reagent, product), values in data.items():
-            average = sum(values) / len(values)
-            writer.writerow([reagent, product, average, *values])
 
 def findMassScansFileNames(clientFolder, rootDir):
     clientPath = Path(rootDir) / clientFolder
-    allDirectoresUnderClient = [os.path.join(clientPath,d) for d in os.listdir(clientPath) if os.path.isdir(os.path.join(clientPath, d))]
+    allDirectoresUnderClient = [os.path.join(clientPath, d) for d in os.listdir(clientPath) if
+                                os.path.isdir(os.path.join(clientPath, d))]
     allScanFiles = []
     for subDir in allDirectoresUnderClient:
-        for fileName in os.listdir(os.path.join(subDir,subDir)):
+        for fileName in os.listdir(os.path.join(subDir, subDir)):
             res = re.search(r"2-Mass-Scan-pos-neg.* ([0-9]+)min.*\.csv$", fileName)
             if res is None:
                 continue
             minutes = int(res.group(1))
             if minutes == 30:
-                allScanFiles.append((os.path.join(subDir,fileName), minutes))
+                allScanFiles.append((os.path.join(subDir, fileName), minutes))
     return allScanFiles
 
+
 def processMassScans(clientFolder, rootDir, outputPath):
-    allScanNames = findMassScansFileNames(clientFolder, rootDir)
+    allScanPaths = findMassScansFileNames(clientFolder, rootDir)
     clientPath = Path(rootDir) / clientFolder
-    for fileName in allScanNames:
-       massScanData = process_file(os.path.join(fileName[0]))
+
+    for (scanPath,time) in allScanPaths:
+        scanData = process_file(scanPath)
+        fileName = Path(scanPath).name
+        outputName = clientFolder + "-" + str(time) + "min"
+        writeFileDatas(outputPath, outputName, [fileName], scanData)
+
+def findAllBaselinesinOutputFolder(outputPath):
+    baselineFiles = [Path(outputPath)/f for f in os.listdir(outputPath) if f.endswith('baseline.csv')]
+    return baselineFiles
+
+
+def computeConsolodatedBaselines(outputPath):
+    allFiles = findAllBaselinesinOutputFolder(outputPath)
+    allFiles.sort()
+    allNames = []
+    allDatas = []
+    for file in allFiles:
+        data = readFileData(file)
+        if data != {}:
+            allNames.append(file.stem)
+            allDatas.append(data)
+
+    (newNames, newData) = catenateFilesWithAverage(allNames, allDatas)
+    writeFileDatas(outputPath, "averageBaseline", newNames, newData)
 
 
 if __name__ == "__main__":
@@ -154,6 +220,15 @@ if __name__ == "__main__":
     clientFolders = [f for f in os.listdir(ROOT) if re.match(r'AL-\d*', f)]
 
     for clientFolder in clientFolders:
-        process_folder(clientFolder, ROOT, OUTPUT_FOLDER)
+        processBaseline(clientFolder, ROOT, OUTPUT_FOLDER)
+        processMassScans(clientFolder, ROOT, OUTPUT_FOLDER)
+
+        outputBaseline = OUTPUT_FOLDER / (clientFolder +"-baseline.csv")
+        output30min = OUTPUT_FOLDER / (clientFolder +"-30min.csv")
+        renderClientPDF(outputBaseline, output30min)
+
+        computeConsolodatedBaselines(OUTPUT_FOLDER)
+        aveageBaselinePath = OUTPUT_FOLDER / "averageBaseline.csv"
+        renderAverageBaseline(aveageBaselinePath)
 
 
