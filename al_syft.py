@@ -59,6 +59,42 @@ def process_file(fileName):
 
     return data
 
+def process_metabolite_file(fileName):
+    logging.info(f"Processing file {fileName}")
+    data = []
+    with open(fileName, 'r') as f:
+        reader = csv.reader(f)
+        data = list(reader)
+
+    dataSummary = None
+
+    for i, row in enumerate(data):
+        if row[0] == 'Summary':
+            dataSummary = data[i + 3:]
+
+    if dataSummary is None:
+        logging.warning("File Incomplete")
+        return None
+
+    scanResults = {
+        'acetone': None,
+        'ammonia': None,
+        'isoprene': None,
+        'lactic acid': None
+    }
+
+    for row in dataSummary:
+        analyte, concentration = row[0], float(row[1])
+
+        if analyte in scanResults:
+            scanResults[analyte] = concentration
+
+    if any([value is None for value in scanResults.values()]):
+        logging.warning("File Incomplete")
+        return None
+
+    return scanResults
+
 def catenateFilesWithAverage(fileNames, fileDatas):
     newData = {}
     for fileData in fileDatas:
@@ -87,6 +123,9 @@ def readFileData(filePath):
         data = list(reader)
 
     for row in data[1:]:
+        if len(row) <= 3:
+            return {}
+
         reagent, product, intensity, *other = row
         output[(int(reagent), int(product))] = [float(intensity)]
 
@@ -194,6 +233,45 @@ def processMassScans(clientFolder, rootDir, outputPath):
         outputName = clientFolder + "-" + str(time) + "min"
         writeFileDatas(outputPath, outputName, [fileName], scanData)
 
+def findMetabolitesFileNames(clientFolder, rootDir):
+    clientPath = Path(rootDir) / clientFolder
+    allDirectoresUnderClient = [os.path.join(clientPath, d) for d in os.listdir(clientPath) if
+                                os.path.isdir(os.path.join(clientPath, d))]
+    allScanFiles = []
+    for subDir in allDirectoresUnderClient:
+        for fileName in os.listdir(os.path.join(subDir, subDir)):
+            res = re.search(r"3.* (-?[0-9]+)min.*\.csv$", fileName)
+            if res is None:
+                continue
+            minutes = int(res.group(1))
+            if minutes in [-3, -7, 0, 30]:
+                allScanFiles.append((os.path.join(subDir, fileName), minutes))
+    return allScanFiles
+
+
+def processMetabolites(clientFolder, rootDir, outputPath):
+    allScanPaths = findMetabolitesFileNames(clientFolder, rootDir)
+
+    allScanPaths.sort(key=lambda path: path[1], reverse=True)
+
+    for (scanPath, time) in allScanPaths:
+        scanData = process_metabolite_file(scanPath)
+
+        if scanData is None:
+            continue
+
+        outputName = clientFolder + "-metabolite-" + str(time) + "min"
+
+        if time < 0:
+            outputName = clientFolder + "-metabolite-baseline"
+
+        with open(outputPath / (outputName + '.csv'), 'w') as f:
+            writer = csv.writer(f)
+            writer.writerow(["Analyte", "Concentration"])
+            for analyte, concentration in scanData.items():
+                writer.writerow([analyte, concentration])
+
+
 def findAllBaselinesinOutputFolder(outputPath):
     baselineFiles = [Path(outputPath)/f for f in os.listdir(outputPath) if f.endswith('baseline.csv')]
     return baselineFiles
@@ -222,10 +300,13 @@ if __name__ == "__main__":
     for clientFolder in clientFolders:
         processBaseline(clientFolder, ROOT, OUTPUT_FOLDER)
         processMassScans(clientFolder, ROOT, OUTPUT_FOLDER)
+        processMetabolites(clientFolder, ROOT, OUTPUT_FOLDER)
 
         outputBaseline = OUTPUT_FOLDER / (clientFolder +"-baseline.csv")
         output30min = OUTPUT_FOLDER / (clientFolder +"-30min.csv")
-        renderClientPDF(outputBaseline, output30min)
+        outputMetaboliteBaseline = OUTPUT_FOLDER / (clientFolder +"-metabolite-baseline.csv")
+        outputMetabolite30min = OUTPUT_FOLDER / (clientFolder +"-metabolite-30min.csv")
+        renderClientPDF(outputBaseline, output30min, outputMetaboliteBaseline, outputMetabolite30min)
 
         computeConsolodatedBaselines(OUTPUT_FOLDER)
         aveageBaselinePath = OUTPUT_FOLDER / "averageBaseline.csv"
